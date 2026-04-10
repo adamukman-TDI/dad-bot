@@ -1,4 +1,4 @@
-flask
-anthropic
+flask>=3.0
+anthropic>=0.40.0
 python-dotenv
 gunicorn
