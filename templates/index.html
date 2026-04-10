@@ -269,10 +269,24 @@
             if (on) chat.scrollTop = chat.scrollHeight;
         }
 
+        async function fetchWithRetry(url, options, retries = 2) {
+            for (let i = 0; i <= retries; i++) {
+                try {
+                    const res = await fetch(url, options);
+                    if (res.ok) return res;
+                    if (i < retries) await new Promise(r => setTimeout(r, 2000));
+                } catch (e) {
+                    if (i < retries) await new Promise(r => setTimeout(r, 2000));
+                    else throw e;
+                }
+            }
+            throw new Error('Failed after retries');
+        }
+
         async function getOpening() {
             setLoading(true);
             try {
-                const res = await fetch('/api/opening', { method: 'POST' });
+                const res = await fetchWithRetry('/api/opening', { method: 'POST' });
                 const data = await res.json();
                 addMessage(data.response, 'ray');
             } catch (e) {
@@ -292,7 +306,7 @@
             setLoading(true);
 
             try {
-                const res = await fetch('/api/chat', {
+                const res = await fetchWithRetry('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: text }),
