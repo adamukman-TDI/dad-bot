@@ -254,6 +254,7 @@
             div.innerHTML = `<div class="message-label">${label}</div>${escapeHtml(text)}`;
             chat.insertBefore(div, typing);
             chat.scrollTop = chat.scrollHeight;
+            return div;
         }
 
         function escapeHtml(text) {
@@ -269,26 +270,43 @@
             if (on) chat.scrollTop = chat.scrollHeight;
         }
 
-        async function fetchWithRetry(url, options, retries = 2) {
-            for (let i = 0; i <= retries; i++) {
-                try {
-                    const res = await fetch(url, options);
-                    if (res.ok) return res;
-                    if (i < retries) await new Promise(r => setTimeout(r, 2000));
-                } catch (e) {
-                    if (i < retries) await new Promise(r => setTimeout(r, 2000));
-                    else throw e;
+        async function streamResponse(url, options) {
+            const res = await fetch(url, options);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            const msgDiv = addMessage('', 'ray');
+            const label = msgDiv.querySelector('.message-label');
+            let fullText = '';
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const data = JSON.parse(line.slice(6));
+                    if (data.delta) {
+                        fullText += data.delta;
+                        msgDiv.innerHTML = `<div class="message-label">Ray</div>${escapeHtml(fullText)}`;
+                        chat.scrollTop = chat.scrollHeight;
+                    }
                 }
             }
-            throw new Error('Failed after retries');
+            return fullText;
         }
 
         async function getOpening() {
             setLoading(true);
             try {
-                const res = await fetchWithRetry('/api/opening', { method: 'POST' });
-                const data = await res.json();
-                addMessage(data.response, 'ray');
+                await streamResponse('/api/opening', { method: 'POST' });
             } catch (e) {
                 addMessage("Hmm, having trouble connecting. Give it another shot in a minute.", 'ray');
             }
@@ -306,14 +324,11 @@
             setLoading(true);
 
             try {
-                const res = await fetchWithRetry('/api/chat', {
+                await streamResponse('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: text }),
                 });
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-                addMessage(data.response, 'ray');
             } catch (e) {
                 addMessage("Sorry — something went sideways on my end. Try again?", 'ray');
             }

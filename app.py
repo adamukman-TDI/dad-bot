@@ -1,7 +1,8 @@
 import os
 import uuid
+import json
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, Response
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -27,28 +28,40 @@ def index():
     return render_template("index.html")
 
 
+def stream_response(messages, conv_id, max_tokens=350):
+    """Stream response from Anthropic API using SSE to avoid proxy timeouts."""
+    def generate():
+        full_text = ""
+        with client.messages.stream(
+            model=MODEL,
+            max_tokens=max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                full_text += text
+                yield f"data: {json.dumps({'delta': text})}\n\n"
+
+        # Save full response to conversation history
+        conversations[conv_id].append({"role": "assistant", "content": full_text})
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.route("/api/opening", methods=["POST"])
 def opening():
     """Get Ray's opening message to start the conversation."""
     conv_id = session.get("conv_id")
     if not conv_id or conv_id not in conversations:
-        # Conversation lost (e.g. worker mismatch) — create a new one
         conv_id = str(uuid.uuid4())
         session["conv_id"] = conv_id
         conversations[conv_id] = []
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=200,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": "[New conversation started. Send your opening message as Ray.]"}],
-    )
-    ray_text = response.content[0].text
-    conversations[conv_id] = [
-        {"role": "user", "content": "[New conversation started. Send your opening message as Ray.]"},
-        {"role": "assistant", "content": ray_text},
-    ]
-    return jsonify({"response": ray_text})
+    opening_msg = [{"role": "user", "content": "[New conversation started. Send your opening message as Ray.]"}]
+    conversations[conv_id] = list(opening_msg)
+    return stream_response(opening_msg, conv_id, max_tokens=200)
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -64,16 +77,7 @@ def chat():
     messages = conversations[conv_id]
     messages.append({"role": "user", "content": user_message})
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=350,
-        system=SYSTEM_PROMPT,
-        messages=messages,
-    )
-    ray_text = response.content[0].text
-    messages.append({"role": "assistant", "content": ray_text})
-
-    return jsonify({"response": ray_text})
+    return stream_response(messages, conv_id)
 
 
 if __name__ == "__main__":
