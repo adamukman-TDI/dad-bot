@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24))
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-fallback-key-change-me")
 
-client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 MODEL = "claude-sonnet-4-20250514"
 
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text()
@@ -32,7 +32,10 @@ def opening():
     """Get Ray's opening message to start the conversation."""
     conv_id = session.get("conv_id")
     if not conv_id or conv_id not in conversations:
-        return jsonify({"error": "No conversation"}), 400
+        # Conversation lost (e.g. worker mismatch) — create a new one
+        conv_id = str(uuid.uuid4())
+        session["conv_id"] = conv_id
+        conversations[conv_id] = []
 
     response = client.messages.create(
         model=MODEL,
@@ -52,7 +55,7 @@ def opening():
 def chat():
     conv_id = session.get("conv_id")
     if not conv_id or conv_id not in conversations:
-        return jsonify({"error": "No conversation"}), 400
+        return jsonify({"error": "Session expired. Please refresh the page."}), 400
 
     user_message = request.json.get("message", "").strip()
     if not user_message:
